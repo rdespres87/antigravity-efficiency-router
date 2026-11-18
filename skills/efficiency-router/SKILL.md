@@ -23,12 +23,9 @@ CLI: `python ~/.gemini/config/plugins/efficiency-router/scripts/router.py <cmd>`
 | Manually set a budget | `set <bucket> <5h\|7d> <tokens>` |
 | Start fresh | `reset` |
 
-Numbers are **estimates** (transcript size / 4 + overhead per call). Say so when
-reporting. Calibration makes the levels match real limits; recommend it the first
-time the user hits a limit.
-
-After `calibrate`, briefly tell the user the new budget and that YELLOW/RED will
-now trigger at 60%/85% of it.
+Numbers come directly from the **Antigravity Language Server API (real fractions)**.
+Token logging and estimates are maintained as fallback and for the 7d offload ratio.
+Calibration (`calibrate`) remains available as a fallback when real API quota data is unavailable.
 
 ## Delegation templates
 

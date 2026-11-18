@@ -3,7 +3,7 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python scripts/router.py hook || python3 scripts/router.py hook",
+        "command": "python3 \"${PLUGIN_ROOT:-.}/scripts/router.py\" hook || python3 scripts/router.py hook",
         "timeout": 10
       }
     ]

@@ -7,9 +7,8 @@ Two roles:
                can route work to cheaper models when quota gets tight.
   2. CLI     - status / calibrate / set / alias / reset for the ledger and budgets.
 
-Token counts are ESTIMATES (transcript size / bytes_per_token + overhead).
-Antigravity does not expose real quota numbers, so budgets should be calibrated
-with `calibrate` the moment you actually hit a limit.
+Quota data comes from Antigravity's local language server API (real fractions),
+NOT from token estimates. Token logging is still recorded for offload ratio stats.
 
 Python 3.9 compatible, stdlib only. The hook must never crash the agent loop:
 any failure prints `{}` and exits 0.
@@ -18,8 +17,11 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "router_config.json")
@@ -68,6 +70,147 @@ def file_lock(path=LOCK_PATH):
             f.close()
         except Exception:
             pass
+
+
+# --------------------------------------------------------------------------- io
+QUOTA_CACHE_PATH = os.path.join(DATA_DIR, "quota_cache.json")
+_REAL_QUOTA_TTL = 30  # seconds
+
+
+def _fetch_antigravity_quotas(force=False):
+    """Fetch real quota fractions from Antigravity's local language server.
+
+    Returns dict mapping plugin bucket names -> dict of windows:
+      {
+        "gemini_flash": {
+          "5h": {"fraction": 0.76, "disabled": False, "description": "...", "reset": "..."},
+          "7d": {"fraction": 0.11, "disabled": False, "description": "...", "reset": "..."}
+        },
+        ...
+      }
+    Falls back to cached file if within TTL.
+    """
+    now = time.time()
+    if not force and os.path.exists(QUOTA_CACHE_PATH):
+        try:
+            with open(QUOTA_CACHE_PATH, encoding="utf-8") as f:
+                cached = json.load(f)
+                if now - cached.get("ts", 0) < _REAL_QUOTA_TTL:
+                    return cached.get("data")
+        except Exception:
+            pass
+
+    # Find agy process via ps
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True, text=True, check=True, timeout=3
+        )
+    except Exception:
+        return None
+
+    # Discover and pair (hub_port, csrf_token) directly from running agy instances
+    candidates = []
+    seen = set()
+    for line in result.stdout.strip().split("\n"):
+        if "agy" not in line or "--csrf_token=" not in line or "--hub-port=" not in line:
+            continue
+        try:
+            tok = line.split("--csrf_token=")[1].split()[0]
+            port = int(line.split("--hub-port=")[1].split()[0])
+            pair = (port, tok)
+            if pair not in seen:
+                seen.add(pair)
+                candidates.append(pair)
+        except (ValueError, IndexError):
+            continue
+
+    if not candidates:
+        return None
+
+    # Map Antigravity bucketId -> plugin buckets
+    mapping = {
+        "gemini-weekly": "gemini_flash",
+        "gemini-5h": "gemini_flash",
+        "gemini-argon-wtu-weekly": "gemini_pro",
+        "3p-weekly": "claude",
+        "3p-5h": "claude",
+    }
+
+    # Query language server on each candidate
+    for port, token in candidates:
+        url = f"http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+        headers = {
+            "Content-Type": "application/json",
+            "Connect-Protocol-Version": "1",
+            "x-codeium-csrf-token": token,
+        }
+        body = json.dumps({"project": " "}).encode()
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                data = json.loads(resp.read().decode())
+                groups = data.get("response", {}).get("groups", [])
+                if not groups:
+                    continue
+
+                res = {}
+                for group in groups:
+                    for bucket in group.get("buckets", []):
+                        aggy_bid = bucket.get("bucketId", "")
+                        plugin_bucket = mapping.get(aggy_bid)
+                        if not plugin_bucket:
+                            continue
+                        frac = bucket.get("remainingFraction", 0.0)
+                        desc = bucket.get("description", "")
+                        window = bucket.get("window", "unknown")
+                        disabled = bucket.get("disabled", False)
+                        reset = bucket.get("resetTime", "")
+
+                        win_key = "5h" if window == "5h" else "7d"
+                        res.setdefault(plugin_bucket, {})[win_key] = {
+                            "fraction": frac,
+                            "disabled": disabled,
+                            "description": desc,
+                            "reset": reset,
+                        }
+
+                # Persist to disk cache
+                save_json(QUOTA_CACHE_PATH, {"ts": now, "data": res})
+                return res
+        except Exception:
+            continue
+
+    return None
+
+
+def get_real_quota_window(bucket, window="7d"):
+    """Get real quota info for a bucket and window ('5h' or '7d').
+
+    Returns dict:
+      {
+        "fraction": float,   # remaining fraction 0.0 - 1.0
+        "disabled": bool,    # True if limit is disabled/exhausted
+        "description": str,
+        "reset": str
+      }
+    or None if no quota info exists for this bucket/window.
+    """
+    real = _fetch_antigravity_quotas()
+    if not real:
+        return None
+    return real.get(bucket, {}).get(window)
+
+
+def get_real_quota_fraction(bucket, window="7d"):
+    """Get real remaining fraction (0.0-1.0) for a plugin bucket window.
+
+    Returns float or None if unavailable/disabled.
+    """
+    info = get_real_quota_window(bucket, window)
+    if not info or info.get("disabled", False):
+        return None
+    return info.get("fraction", None)
 
 
 # --------------------------------------------------------------------------- io
@@ -370,15 +513,51 @@ def run_hook():
     u = window_usage(entries, bucket, now)
     lvl, p5, p7 = level_for(u, bcfg, cfg)
 
+    # Override with real quota fractions from Antigravity API
+    info_5h = get_real_quota_window(bucket, "5h")
+    info_7d = get_real_quota_window(bucket, "7d")
+    use_real = info_5h is not None or info_7d is not None
+
+    if use_real:
+        p5_real = (1.0 - info_5h["fraction"]) if (info_5h and not info_5h.get("disabled")) else (1.0 if (info_5h and info_5h.get("disabled")) else None)
+        p7_real = (1.0 - info_7d["fraction"]) if (info_7d and not info_7d.get("disabled")) else (1.0 if (info_7d and info_7d.get("disabled")) else None)
+        valid_p = [p for p in (p5_real, p7_real) if p is not None]
+        worst = max(valid_p) if valid_p else 0.0
+        th = cfg.get("thresholds", {})
+        if worst >= th.get("red", 0.85):
+            lvl = "RED"
+        elif worst >= th.get("yellow", 0.6):
+            lvl = "YELLOW"
+        else:
+            lvl = "GREEN"
+        p5 = p5_real
+        p7 = p7_real
+        real_source = "REAL"
+    else:
+        real_source = "EST"
+
     dispatch = ""
     if tier == "cheap" and hint.startswith("T3"):
         dispatch = " | AUTO-PRO"
     elif tier == "premium" and hint.startswith(("T0", "T1")):
         dispatch = " | LIGHT"
-    msg = "[router] main={b}/{t} | 5h {p5:.0%} . 7d {p7:.0%} (est) | {lvl} | task~{h}{d}".format(
-        b=bucket, t=tier, p5=p5, p7=p7, lvl=lvl, h=hint, d=dispatch
+
+    p5_str = "{:.0%}".format(p5) if p5 is not None else "N/A"
+    p7_str = "{:.0%}".format(p7) if p7 is not None else "N/A"
+    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}".format(
+        b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source
     )
-    print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}, ensure_ascii=False))
+
+    out = {
+        "injectSteps": [
+            {
+                "systemMessage": {
+                    "systemMessage": msg
+                }
+            }
+        ]
+    }
+    print(json.dumps(out, ensure_ascii=False))
 
 
 # ------------------------------------------------------------------------ cli
@@ -394,7 +573,9 @@ def cmd_status():
     cfg = load_config()
     now = time.time()
     entries = read_ledger(now)
-    print("Efficiency Router  (estimates; calibrate when you hit a real limit)")
+    real = _fetch_antigravity_quotas()
+    source = "REAL" if real else "estimates"
+    print("Efficiency Router  ({} quota data)".format(source))
     print("{:<13} {:<8} {:>16} {:>6} {:>17} {:>6} {:>7}".format(
         "bucket", "tier", "5h used/budget", "5h%", "7d used/budget", "7d%", "level"))
     total7 = 0
@@ -405,12 +586,55 @@ def cmd_status():
         total7 += u["t7"]
         if u["n7"] == 0 and name == "unknown":
             continue
-        lvl, p5, p7 = level_for(u, b, cfg)
-        print("{:<13} {:<8} {:>16} {:>6} {:>17} {:>6} {:>7}".format(
-            name, b.get("tier", "?"),
-            "{}/{}".format(fmt_tok(u["t5"]), fmt_tok(b.get("budget_5h", 0))), "{:.0%}".format(p5),
-            "{}/{}".format(fmt_tok(u["t7"]), fmt_tok(b.get("budget_7d", 0))), "{:.0%}".format(p7),
-            lvl))
+
+        info_5h = get_real_quota_window(name, "5h") if real else None
+        info_7d = get_real_quota_window(name, "7d") if real else None
+
+        if info_5h is not None or info_7d is not None:
+            # 5h window
+            if info_5h is None:
+                txt_5h, pct_5h = "N/A", "-"
+                p5 = None
+            elif info_5h.get("disabled"):
+                txt_5h, pct_5h = "DISABLED", "100%"
+                p5 = 1.0
+            else:
+                p5 = 1.0 - info_5h.get("fraction", 0.0)
+                txt_5h, pct_5h = "REAL", "{:.0%}".format(p5)
+
+            # 7d window
+            if info_7d is None:
+                txt_7d, pct_7d = "N/A", "-"
+                p7 = None
+            elif info_7d.get("disabled"):
+                txt_7d, pct_7d = "DISABLED", "100%"
+                p7 = 1.0
+            else:
+                p7 = 1.0 - info_7d.get("fraction", 0.0)
+                txt_7d, pct_7d = "REAL", "{:.0%}".format(p7)
+
+            valid_p = [p for p in (p5, p7) if p is not None]
+            worst = max(valid_p) if valid_p else 0.0
+            th = cfg.get("thresholds", {})
+            if worst >= th.get("red", 0.85):
+                lvl = "RED"
+            elif worst >= th.get("yellow", 0.6):
+                lvl = "YELLOW"
+            else:
+                lvl = "GREEN"
+
+            print("{:<13} {:<8} {:>16} {:>6} {:>17} {:>6} {:>7}".format(
+                name, b.get("tier", "?"),
+                txt_5h, pct_5h,
+                txt_7d, pct_7d,
+                lvl))
+        else:
+            lvl, p5, p7 = level_for(u, b, cfg)
+            print("{:<13} {:<8} {:>16} {:>6} {:>17} {:>6} {:>7}".format(
+                name, b.get("tier", "?"),
+                "{}/{}".format(fmt_tok(u["t5"]), fmt_tok(b.get("budget_5h", 0))), "{:.0%}".format(p5),
+                "{}/{}".format(fmt_tok(u["t7"]), fmt_tok(b.get("budget_7d", 0))), "{:.0%}".format(p7),
+                lvl))
     if total7:
         prem = sum(v for k, v in by_bucket7.items() if cfg["buckets"].get(k, {}).get("tier") == "premium")
         print("\nOffload ratio (7d, non-premium share of tokens): {:.0%}".format(1 - prem / float(total7)))
@@ -438,32 +662,46 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="buckets" class="space-y-2"></div>
   <div>
-    <div class="text-xs text-[var(--muted-foreground)] mb-1">최근 24시간 (시간별 추정 토큰)</div>
+    <div class="text-xs text-[var(--muted-foreground)] mb-1">Last 24h (estimated hourly tokens)</div>
     <div id="chart" class="flex items-end gap-[2px] h-16"></div>
     <div id="legend" class="flex gap-3 mt-1 text-xs text-[var(--muted-foreground)]"></div>
   </div>
   <div class="grid grid-cols-3 gap-2 text-center">
-    <div class="rounded-lg border border-[var(--border)] p-2"><div class="text-lg font-semibold" id="off"></div><div class="text-xs text-[var(--muted-foreground)]">Claude 외 처리 비율 (7일)</div></div>
-    <div class="rounded-lg border border-[var(--border)] p-2"><div class="text-lg font-semibold" id="calls"></div><div class="text-xs text-[var(--muted-foreground)]">호출 수 (7일)</div></div>
+    <div class="rounded-lg border border-[var(--border)] p-2"><div class="text-lg font-semibold" id="off"></div><div class="text-xs text-[var(--muted-foreground)]">Offload Ratio (7d, non-premium)</div></div>
+    <div class="rounded-lg border border-[var(--border)] p-2"><div class="text-lg font-semibold" id="calls"></div><div class="text-xs text-[var(--muted-foreground)]">Calls (7d)</div></div>
     <div class="rounded-lg border border-[var(--border)] p-2"><div id="mix" class="flex h-3 rounded overflow-hidden mt-1"></div><div class="text-xs text-[var(--muted-foreground)] mt-2" id="mixl"></div></div>
   </div>
   <div id="rec" class="text-sm rounded-lg p-2 border border-[var(--border)]"></div>
 </div>
 <script>
 const D = __DATA__;
-const LV = {GREEN:["#34a853","여유"],YELLOW:["#f9ab00","절약 모드"],RED:["#ea4335","한도 임박"]};
+const LV = {GREEN:["#34a853","OK"],YELLOW:["#f9ab00","Conserving"],RED:["#ea4335","Near Limit"]};
 const fmt = n => n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?Math.round(n/1e3)+"k":String(n);
 const pct = p => Math.round(p*100)+"%";
-document.getElementById("gen").textContent = D.generated + " 기준 · 추정치";
+document.getElementById("gen").textContent = D.generated + (D.real ? " · Quotas réels (API)" : " · Estimations");
 const lv = LV[D.level]; const b = document.getElementById("lvl");
 b.textContent = D.level+" · "+lv[1]; b.style.background = lv[0]+"26"; b.style.color = lv[0];
 const bar = (p,c) => `<div class="h-1.5 rounded bg-[var(--border)] overflow-hidden"><div class="h-full rounded" style="width:${Math.min(100,p*100)}%;background:${c}"></div></div>`;
-document.getElementById("buckets").innerHTML = D.buckets.map(x => `
-  <div class="grid grid-cols-[100px_1fr_1fr] gap-3 items-center text-xs">
+document.getElementById("buckets").innerHTML = D.buckets.map(x => {
+  if (x.real) {
+    const rem5 = x.p5 !== null ? Math.round((1 - x.p5) * 100) : null;
+    const rem7 = x.p7 !== null ? Math.round((1 - x.p7) * 100) : null;
+    const txt5 = x.disabled5 ? "DISABLED" : (rem5 !== null ? rem5 + "%" : "N/A");
+    const txt7 = x.disabled7 ? "DISABLED" : (rem7 !== null ? rem7 + "%" : "N/A");
+    const val5 = x.p5 !== null ? x.p5 : 0;
+    const val7 = x.p7 !== null ? x.p7 : 0;
+    return `<div class="grid grid-cols-[100px_1fr_1fr] gap-3 items-center text-xs">
+      <div><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:${x.color}"></span>${x.name}</div>
+      <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>5h remaining</span><span class="${x.disabled5 ? 'text-red-500 font-semibold' : ''}">${txt5}</span></div>${bar(val5,x.color)}</div>
+      <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>7d remaining</span><span class="${x.disabled7 ? 'text-red-500 font-semibold' : ''}">${txt7}</span></div>${bar(val7,x.color)}</div>
+    </div>`;
+  }
+  return `<div class="grid grid-cols-[100px_1fr_1fr] gap-3 items-center text-xs">
     <div><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:${x.color}"></span>${x.name}</div>
-    <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>5h ${fmt(x.t5)}/${fmt(x.b5)}</span><span>${pct(x.p5)} 소진 (잔여 ${pct(Math.max(0, 1 - x.p5))})</span></div>${bar(x.p5,x.color)}</div>
-    <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>7d ${fmt(x.t7)}/${fmt(x.b7)}</span><span>${pct(x.p7)} 소진</span></div>${bar(x.p7,x.color)}</div>
-  </div>`).join("");
+    <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>5h ${fmt(x.t5)}/${fmt(x.b5)}</span><span>${pct(x.p5)} used (remaining ${pct(Math.max(0, 1 - x.p5))})</span></div>${bar(x.p5,x.color)}</div>
+    <div><div class="flex justify-between text-[var(--muted-foreground)] mb-0.5"><span>7d ${fmt(x.t7)}/${fmt(x.b7)}</span><span>${pct(x.p7)} used</span></div>${bar(x.p7,x.color)}</div>
+  </div>`;
+}).join("");
 const mx = Math.max(1, ...D.hourly.map(h => D.order.reduce((s,k)=>s+(h[k]||0),0)));
 document.getElementById("chart").innerHTML = D.hourly.map(h => {
   const segs = D.order.filter(k=>h[k]).map(k=>`<div style="height:${h[k]/mx*64}px;background:${D.colors[k]}"></div>`).join("");
@@ -475,7 +713,7 @@ document.getElementById("calls").textContent = D.calls;
 const MC = {T0:"#9aa0a6",T1:"#34a853",T2:"#4285f4",T3:"#d97757"};
 const tot = Object.values(D.mix).reduce((a,c)=>a+c,0)||1;
 document.getElementById("mix").innerHTML = ["T0","T1","T2","T3"].map(t=>`<div style="width:${(D.mix[t]||0)/tot*100}%;background:${MC[t]}"></div>`).join("");
-document.getElementById("mixl").textContent = "작업 난이도 " + ["T0","T1","T2","T3"].map(t=>t+":"+(D.mix[t]||0)).join(" ");
+document.getElementById("mixl").textContent = "Task difficulty " + ["T0","T1","T2","T3"].map(t=>t+":"+((D.mix[t]||0))).join(" ");
 document.getElementById("rec").textContent = D.rec;
 </script>
 </body></html>
@@ -484,6 +722,8 @@ document.getElementById("rec").textContent = D.rec;
 
 def build_dashboard_data(cfg, now):
     entries = read_ledger(now)
+    real = _fetch_antigravity_quotas()
+    use_real = real is not None
     order = [k for k in cfg["buckets"] if k != "unknown"]
     if any(e.get("bucket") == "unknown" for e in entries):
         order.append("unknown")
@@ -493,6 +733,39 @@ def build_dashboard_data(cfg, now):
     for name in order:
         b = cfg["buckets"][name]
         u = window_usage(entries, name, now)
+        info_5h = get_real_quota_window(name, "5h") if use_real else None
+        info_7d = get_real_quota_window(name, "7d") if use_real else None
+
+        # Use real quota if available
+        if info_5h is not None or info_7d is not None:
+            p5 = (1.0 - info_5h["fraction"]) if (info_5h and not info_5h.get("disabled")) else (1.0 if (info_5h and info_5h.get("disabled")) else None)
+            p7 = (1.0 - info_7d["fraction"]) if (info_7d and not info_7d.get("disabled")) else (1.0 if (info_7d and info_7d.get("disabled")) else None)
+            valid_p = [p for p in (p5, p7) if p is not None]
+            worst_lvl = max(valid_p) if valid_p else 0.0
+            th = cfg.get("thresholds", {})
+            if worst_lvl >= th.get("red", 0.85):
+                lvl = "RED"
+            elif worst_lvl >= th.get("yellow", 0.6):
+                lvl = "YELLOW"
+            else:
+                lvl = "GREEN"
+
+            buckets.append({
+                "name": name,
+                "t5": u["t5"], "b5": b.get("budget_5h", 0), "p5": round(p5, 4) if p5 is not None else None,
+                "t7": u["t7"], "b7": b.get("budget_7d", 0), "p7": round(p7, 4) if p7 is not None else None,
+                "disabled5": bool(info_5h and info_5h.get("disabled")),
+                "disabled7": bool(info_7d and info_7d.get("disabled")),
+                "level": lvl,
+                "color": BUCKET_COLORS.get(name, "#9aa0a6"),
+                "real": True
+            })
+            if rank[lvl] > rank[worst]:
+                worst = lvl
+            if b.get("tier") == "premium" and rank[lvl] > rank[premium_level]:
+                premium_level = lvl
+            continue
+
         lvl, p5, p7 = level_for(u, b, cfg)
         if rank[lvl] > rank[worst]:
             worst = lvl
@@ -500,12 +773,14 @@ def build_dashboard_data(cfg, now):
             premium_level = lvl
         buckets.append({"name": name, "t5": u["t5"], "b5": b.get("budget_5h", 0), "p5": round(p5, 4),
                         "t7": u["t7"], "b7": b.get("budget_7d", 0), "p7": round(p7, 4),
-                        "level": lvl, "color": BUCKET_COLORS.get(name, "#9aa0a6")})
+                        "disabled5": False, "disabled7": False,
+                        "level": lvl, "color": BUCKET_COLORS.get(name, "#9aa0a6"),
+                        "real": False})
     hourly = []
     start = int(now // 3600) * 3600 - 23 * 3600
     for i in range(24):
         h0 = start + i * 3600
-        row = {"label": time.strftime("%m-%d %H시", time.localtime(h0))}
+        row = {"label": time.strftime("%m-%d %H:00", time.localtime(h0))}
         for e in entries:
             if h0 <= e.get("ts", 0) < h0 + 3600:
                 row[e.get("bucket", "unknown")] = row.get(e.get("bucket", "unknown"), 0) + e.get("tok", 0)
@@ -518,15 +793,15 @@ def build_dashboard_data(cfg, now):
         if h in ("T0", "T1", "T2", "T3"):
             mix[h] = mix.get(h, 0) + 1
     if premium_level == "RED":
-        rec = "🔴 Claude 한도 임박 — 모델 드롭다운에서 Gemini로 전환하세요. Claude는 최종 검토에만 쓰세요."
+        rec = "🔴 Limite Claude atteinte ou imminente — privilégier Gemini Flash pour les tâches courantes."
     elif premium_level == "YELLOW":
-        rec = "🟡 절약 모드 — 단순·표준 작업은 Flash/Pro 서브에이전트로 자동 위임 중입니다."
+        rec = "🟡 Mode conservation — tâches simples/standard déléguées automatiquement à Flash/Pro."
     else:
-        rec = "🟢 여유 있음 — 평소대로 쓰되 단순 작업은 Flash로 위임됩니다."
+        rec = "🟢 Quotas nominaux — usage normal."
     return {"generated": time.strftime("%Y-%m-%d %H:%M", time.localtime(now)), "level": worst,
             "buckets": buckets, "hourly": hourly, "order": order, "colors": BUCKET_COLORS,
             "offload": (1 - prem7 / float(total7)) if total7 else None,
-            "calls": len(entries), "mix": mix, "rec": rec}
+            "calls": len(entries), "mix": mix, "rec": rec, "real": use_real}
 
 
 def cmd_dashboard(args):

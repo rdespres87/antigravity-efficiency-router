@@ -32,6 +32,7 @@ ONCE that the premium quota is nearly exhausted.
 Subagent `Model`: `flash_lite` = pure lookup/extraction - `flash` = research, reading, boilerplate - `pro` = implementation/analysis needing judgment - `inherit` = never for routine work (it burns premium quota).
 
 ## 3. Delegation rules
+- **Local model offloading (0 tokens)**: When LM Studio is running, mechanical coding tasks (T0/T1, isolated functions, unit tests, docstrings, boilerplate, format conversions) can be delegated to the local model via the MCP tool `execute_local_task` on `tiered-router` to consume zero cloud quota.
 - `invoke_subagent` with TypeName `research` (read-only) or `self` (edits), plus the `Model` above. Launch independent subagents in parallel in one call.
 - Prompts must be self-contained: goal, exact paths, constraints, done-criteria, compact return format (bullets, file:line refs, <=300 words). Never request full file dumps.
 - Don't delegate if you can finish in <=2 tool calls - overhead exceeds savings.

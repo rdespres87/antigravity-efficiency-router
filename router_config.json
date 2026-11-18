@@ -19,29 +19,33 @@
         "claude",
         "opus",
         "sonnet",
-        "anthropic"
+        "anthropic",
+        "\\bgpt",
+        "openai"
       ],
-      "budget_5h": 1245758,
-      "budget_7d": 12457580,
+      "budget_5h": 15000000,
+      "budget_7d": 70000000,
       "calibrated_5h": "2026-10-04 03:07"
     },
     "gemini_pro": {
       "tier": "strong",
       "patterns": [
         "gemini.*pro",
-        "\\bpro\\b"
+        "\\bpro\\b",
+        "argon"
       ],
       "budget_5h": 15000000,
-      "budget_7d": 150000000
+      "budget_7d": 70000000
     },
     "gemini_flash": {
       "tier": "cheap",
       "patterns": [
         "flash",
-        "lite"
+        "lite",
+        "hydrogen"
       ],
       "budget_5h": 50000000,
-      "budget_7d": 500000000
+      "budget_7d": 200000000
     },
     "unknown": {
       "tier": "premium",
