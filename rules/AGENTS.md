@@ -33,6 +33,8 @@ Subagent `Model`: `flash_lite` = pure lookup/extraction - `flash` = research, re
 
 ## 3. Delegation rules
 - **Local model offloading (0 tokens)**: When LM Studio is running, mechanical coding tasks (T0/T1, isolated functions, unit tests, docstrings, boilerplate, format conversions) can be delegated to the local model via the MCP tool `execute_local_task` on `tiered-router` to consume zero cloud quota.
+- **Local Auto-Healing Loop (0 cloud tokens)**: When code is generated locally via `execute_local_task`, validate it immediately with native toolchains (`rtk cargo check`, `rtk cargo test`, `tsc --noEmit`, etc.). If an error occurs, feed the diagnostic output back to `execute_local_task` (passing the error in `context`) to correct it locally without consuming cloud tokens. Only escalate to cloud models if 2 local correction cycles fail.
+- **Project Architectural Memory (Headroom MCP)**: For all projects, use Headroom (`headroom_retrieve` / `headroom_compress`) to retrieve and persist codebase architecture summaries, interface contracts, and module roles across sessions instead of repeatedly reading dozens of raw source files.
 - `invoke_subagent` with TypeName `research` (read-only) or `self` (edits), plus the `Model` above. Launch independent subagents in parallel in one call.
 - Prompts must be self-contained: goal, exact paths, constraints, done-criteria, compact return format (bullets, file:line refs, <=300 words). Never request full file dumps.
 - Don't delegate if you can finish in <=2 tool calls - overhead exceeds savings.
@@ -44,3 +46,11 @@ Subagent `Model`: `flash_lite` = pure lookup/extraction - `flash` = research, re
 - Batch independent tool calls in parallel.
 - Concise replies; don't restate artifacts or tool output; no unrequested summaries.
 - One targeted web search beats five vague ones; stop once the answer is supported.
+
+## 5. Phase Boundary Protocol (Context Hygiene)
+A phase is a discrete milestone (cadrage/plan, implementation, test/review). At each **phase boundary**, evaluate this ordered tree to manage context cleanly:
+1. **Continue**: Take it only if the next step strictly requires the verbatim conversation and budget is GREEN.
+2. **`/clear`**: Take it if all intermediate scratchpads and exploratory work are disposable.
+3. **Subagent (`isolate`)**: Delegate the next phase to an isolated subagent (`self`/`research`) or local model (`execute_local_task`) if the task is self-contained.
+4. **Handoff (`SESSION_HANDOFF_REQUIRED`)**: Persist state to `docs/agent/HANDOFF.md` if switching branches, tasks, or sessions.
+5. **`/compact`**: Compress context memory whenever continuing in the same session after completing a milestone. Prompt the user to run `/compact`.
