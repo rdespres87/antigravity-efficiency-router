@@ -484,6 +484,34 @@ def _check_local_lm_status():
     return ""
 
 
+def _check_headroom_status():
+    """Checks Headroom proxy status and recent auto-compressed files."""
+    status_part = ""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8787/readyz")
+        with urllib.request.urlopen(req, timeout=0.25) as resp:
+            if resp.status == 200:
+                status_part = "headroom=on"
+    except Exception:
+        status_part = "headroom=off"
+
+    state_file = os.path.join(DATA_DIR, "headroom_auto_compressed.json")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            age = time.time() - data.get("timestamp", 0)
+            if age < 30:
+                fn = data.get("file", "file")
+                lines = data.get("lines", 0)
+                h = data.get("hash", "")[:8]
+                return f" | {status_part} (compressed {fn} {lines}L #{h})"
+        except Exception:
+            pass
+
+    return f" | {status_part}" if status_part else ""
+
+
 # ----------------------------------------------------------------------- hook
 def run_hook():
     raw = sys.stdin.buffer.read().decode("utf-8", "replace")
@@ -562,8 +590,9 @@ def run_hook():
     p5_str = "{:.0%}".format(p5) if p5 is not None else "N/A"
     p7_str = "{:.0%}".format(p7) if p7 is not None else "N/A"
     loc_str = _check_local_lm_status()
-    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}".format(
-        b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str
+    head_str = _check_headroom_status()
+    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}{head}".format(
+        b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str, head=head_str
     )
 
     out = {
