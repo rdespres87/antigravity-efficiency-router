@@ -59,8 +59,10 @@ A phase is a discrete milestone (cadrage/plan, implementation, test/review). At 
 4. **Handoff (`SESSION_HANDOFF_REQUIRED`)**: Persist state to `docs/agent/HANDOFF.md` if switching branches, tasks, or sessions.
 5. **`/compact`**: Compress context memory whenever continuing in the same session after completing a milestone. Prompt the user to run `/compact`.
 
-## 6. Git Hygiene & Consent Gate
+## 6. Git Hygiene & Two-Stage Consent Gate (`ask_question`)
 - Commits must be atomic, bisectable, and compile with 100% green CI.
 - Sync README/docs before committing features or modifications.
 - Never mix fixes and features in one commit.
-- Never commit or push without explicit user consent on the displayed diff.
+- **Strictly separate commit and push**: Never bundle them together.
+  - **Commit Gate**: Display diff, propose message, and invoke `ask_question` with interactive choices to confirm local commit.
+  - **Push Gate**: After commit, invoke `ask_question` in a separate turn to request remote push consent (defaulting to keep local).

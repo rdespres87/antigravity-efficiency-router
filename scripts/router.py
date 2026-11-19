@@ -591,7 +591,7 @@ def run_hook():
     p7_str = "{:.0%}".format(p7) if p7 is not None else "N/A"
     loc_str = _check_local_lm_status()
     head_str = _check_headroom_status()
-    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}{head}".format(
+    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}{head} | [MANDATORY] Output phase banner (### [PHASE X/5 : ...]) in visible chat BEFORE calling tools!".format(
         b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str, head=head_str
     )
 
