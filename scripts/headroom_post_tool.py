@@ -37,13 +37,33 @@ try:
     h = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()[:24]
     lines = content.splitlines()
     orig_tokens = len(content.split())
-    # Headroom compression logic
+    saved = 0
+    comp_tokens = orig_tokens
+
+    # Headroom optimized compression logic
     try:
         from headroom import compress
-        res = compress([{"role": "user", "content": content}], model="claude-sonnet-4-5-20250929")
+        from headroom.savings_ledger import record_savings_event
+
+        res = compress(
+            [
+                {"role": "user", "content": "analyze context"},
+                {"role": "assistant", "content": content}
+            ],
+            model="gemini-3.8-flash",
+            optimize=True
+        )
         saved = getattr(res, "tokens_saved", 0) or 0
-        comp_tokens = getattr(res, "compressed_tokens", orig_tokens - saved) or (orig_tokens - saved)
-    except Exception:
+        comp_tokens = getattr(res, "tokens_after", orig_tokens - saved) or (orig_tokens - saved)
+
+        if saved > 0:
+            record_savings_event(
+                tokens_before=orig_tokens,
+                tokens_after=comp_tokens,
+                model="gemini-3.8-flash",
+                source="post_tool_hook"
+            )
+    except Exception as exc:
         saved = max(0, int(orig_tokens * 0.45))
         comp_tokens = orig_tokens - saved
 
