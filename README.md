@@ -32,12 +32,13 @@ Without intelligent routing:
    - **T2 (Standard)**: Feature implementation, regular bug fixes.
    - **T3 (Hard)**: Architecture, concurrency, subtle bugs, security.
 2. **Cache-Aware Incremental Token Accounting**: Intercepts model calls (`PreInvocation`) and calculates only **new incremental tokens + prompt cache discount (10% weight)** instead of re-billing the entire conversation history every turn. Cross-platform advisory file locking (`msvcrt` / `fcntl`) ensures thread/process safety across concurrent subagents.
-3. **Smart Delegation**: Mechanical work (T1) goes to cheap `flash` subagents; standard work (T2) goes to `pro` when it doesn't need the main model's judgment (always when the premium budget is tight), shielding your Claude budget.
-4. **Zero-Click Auto Routing (ceiling model)**: You pick the strongest model once as the main model; everything below it is routed automatically, per question:
+3. **Smart Delegation & Local Offloading**: Mechanical work (T1) goes to cheap `flash` subagents; standard work (T2) goes to `pro` when it doesn't need the main model's judgment (always when the premium budget is tight). When LM Studio is running, mechanical coding tasks and unit tests can be completely offloaded to local models (0 cloud tokens).
+4. **Mandatory Merciless Local Audit**: Enforces an adversarial zero-cloud-token code audit via the local model after every code development or bug fix before git commit.
+5. **Zero-Click Auto Routing (ceiling model)**: You pick the strongest model once as the main model; everything below it is routed automatically, per question:
    - **Auto mode** (main = Claude Opus or any newer top model): T3 is solved by Claude itself, T2 by Gemini Pro or Claude, T1 by Flash, T0 answered briefly.
    - **Economy mode** (main = Gemini Flash): T3 is handed to a Gemini Pro subagent automatically; Claude quota is never touched.
    - Why a ceiling? Antigravity subagents can only run Gemini tiers (`flash_lite`/`flash`/`pro`) or inherit the main model, so Claude can only be reached as the main model.
-5. **Generative UI Dashboard & Accurate Calibration**: View your real-time usage and savings directly inside the chat interface (`"show usage"` or `"사용량 보여줘"`). Calibrate thresholds at any time using your actual provider percentage: `python scripts/router.py calibrate claude 5h <actual_percent>`.
+6. **Generative UI Dashboard & Accurate Calibration**: View your real-time usage and savings directly inside the chat interface (`"show usage"` or `"사용량 보여줘"`). Calibrate thresholds at any time using your actual provider percentage: `python scripts/router.py calibrate claude 5h <actual_percent>`.
 
 ---
 
