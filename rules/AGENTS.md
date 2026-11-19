@@ -66,3 +66,17 @@ A phase is a discrete milestone (cadrage/plan, implementation, test/review). At 
 - **Strictly separate commit and push**: Never bundle them together.
   - **Commit Gate**: Display diff, propose message, and invoke `ask_question` with interactive choices to confirm local commit.
   - **Push Gate**: After commit, invoke `ask_question` in a separate turn to request remote push consent (defaulting to keep local).
+
+## 7. Multilingual Token Efficiency Protocol (Hybrid Optimization)
+To eliminate the 30%–50% token surcharge of French while maintaining conversational comfort:
+1. **Telegraphic French for Conversational Turns**:
+   - Zero conversational fluff, zero polite filler phrases.
+   - Use active verbs, compact bullet points, and keep technical identifiers/terms in native English.
+2. **Quota-Adaptive Asymmetry**:
+   - Conversational chat, status banners, and `ask_question` dialogs remain in concise French.
+   - When quota reaches `YELLOW` or `RED` (or for architectural specifications / contracts >20 lines), the agent outputs technical analysis and implementation drafts in dense technical English.
+3. **English-Only Persistent Memory & History Compression**:
+   - All persistent session state files (`SESSION_STATE.md`, `TASKS.md`, `HANDOFF.md`), `/compact` conversation summaries, and Headroom compressed representations MUST be authored strictly in English to maximize caching density.
+4. **Zero-Cloud Local Model Offloading (LM Studio)**:
+   - Offload heavy mechanical coding, docstrings, boilerplate, and the Phase 3 adversarial audit to the local model via `tiered-router:execute_local_task` (consuming 0 cloud tokens).
+

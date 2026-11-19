@@ -39,6 +39,11 @@ Without intelligent routing:
    - **Economy mode** (main = Gemini Flash): T3 is handed to a Gemini Pro subagent automatically; Claude quota is never touched.
    - Why a ceiling? Antigravity subagents can only run Gemini tiers (`flash_lite`/`flash`/`pro`) or inherit the main model, so Claude can only be reached as the main model.
 6. **Generative UI Dashboard & Accurate Calibration**: View your real-time usage and savings directly inside the chat interface (`"show usage"` or `"사용량 보여줘"`). Calibrate thresholds at any time using your actual provider percentage: `python scripts/router.py calibrate claude 5h <actual_percent>`.
+7. **Multilingual Token Efficiency Protocol (Hybrid Optimization)**: Eliminates the 30%–50% BPE token surcharge of non-English languages (e.g. French) through a 4-layer strategy:
+   - *Telegraphic Style*: Conversational turns use direct phrasing, action verbs, and concise bullets without polite filler.
+   - *Quota-Adaptive Asymmetry*: Routine chat remains in French; complex technical deliverables (>20 lines) switch to dense technical English under `YELLOW` / `RED` quota.
+   - *English-Only Persistent Memory*: All session files (`SESSION_STATE.md`, `HANDOFF.md`, `TASKS.md`), Headroom cache entries, and `/compact` summaries are kept strictly in English to maximize context density.
+   - *Local Offloading*: Offload heavy mechanical coding, boilerplate, and the Phase 3 adversarial audit to the local model via `execute_local_task` (0 cloud tokens).
 
 ---
 
