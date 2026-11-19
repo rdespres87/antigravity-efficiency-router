@@ -58,3 +58,9 @@ A phase is a discrete milestone (cadrage/plan, implementation, test/review). At 
 3. **Subagent (`isolate`)**: Delegate the next phase to an isolated subagent (`self`/`research`) or local model (`execute_local_task`) if the task is self-contained.
 4. **Handoff (`SESSION_HANDOFF_REQUIRED`)**: Persist state to `docs/agent/HANDOFF.md` if switching branches, tasks, or sessions.
 5. **`/compact`**: Compress context memory whenever continuing in the same session after completing a milestone. Prompt the user to run `/compact`.
+
+## 6. Git Hygiene & Consent Gate
+- Commits must be atomic, bisectable, and compile with 100% green CI.
+- Sync README/docs before committing features or modifications.
+- Never mix fixes and features in one commit.
+- Never commit or push without explicit user consent on the displayed diff.
