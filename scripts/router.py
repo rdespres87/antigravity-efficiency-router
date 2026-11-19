@@ -595,6 +595,16 @@ def run_hook():
         b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str, head=head_str
     )
 
+    # Only inject visible system message on the initial invocation of a user turn (invocationNum <= 1)
+    # or if quota hits RED (emergency notice).
+    # All intermediate tool invocations within the same turn will be 100% silent and clean!
+    inv_num = payload.get("invocationNum", 1)
+    is_emergency = (lvl == "RED")
+
+    if inv_num > 1 and not is_emergency:
+        print("{}")
+        return
+
     out = {
         "injectSteps": [
             {
