@@ -36,7 +36,11 @@ Subagent `Model`: `flash_lite` = pure lookup/extraction - `flash` = research, re
 ### Critical Quota Protocol (< 15% 7d remaining or Generalized RED)
 When remaining 7d quota is < 15% (or 7d% >= 85% across active cloud models):
 - **Pure Cloud Orchestrator Mode**: The cloud model is strictly FORBIDDEN from generating code, algorithms, or test implementations directly in the chat or via cloud subagents.
-- **100% Local Worker Offloading**: All code generation, refactoring, bug fixes, and unit tests MUST be executed locally by LM Studio via `call_mcp_tool(ServerName="tiered-router", ToolName="execute_local_task", Arguments={"prompt": ...})` at 0 cloud tokens.
+- **100% Local Worker Offloading**:
+  - All code generation, refactoring, bug fixes, and unit tests MUST be executed locally by LM Studio via `call_mcp_tool(ServerName="tiered-router", ToolName="execute_local_task", Arguments={"prompt": ...})` at 0 cloud tokens.
+  - **Commit Messages & Git Drafting**: Pass `git diff` to `execute_local_task` to formulate the conventional commit message at 0 cloud tokens before presenting Gate A.
+  - **Diagnostic & Fix Triage**: Pass compiler/test outputs to `execute_local_task` for diagnosis and patch drafting.
+  - **Docstrings & Documentation**: Draft markdown sections, comments, and release notes locally.
 - **Cloud Role Restricted to Orchestration**: The cloud model only analyzes requirements, formats prompts for `execute_local_task`, persists returned code to files (`write_file`/`edit_file`), runs verification commands (`cargo test`, `npm test`), and provides telegraphic summaries (< 100 words) to protect remaining tokens.
 
 ## 3. Delegation rules
