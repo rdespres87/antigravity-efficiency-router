@@ -10,10 +10,12 @@ the user unless asked.
 - **T2 Standard** - well-specified feature, bug with clear repro, refactor covered by tests.
 - **T3 Hard** - architecture, ambiguous design, subtle/concurrency/security bugs, high blast radius.
 
-## 2. Auto routing (zero clicks)
-The main model is the **ceiling**: the strongest model available this conversation. Subagents can only be
-`flash_lite` / `flash` / `pro` (Gemini) or `inherit` (= main model). So route **downward** automatically
-and never ask the user to switch models, except the single RED notice below.
+## 2. Auto routing (zero clicks) & The Ceiling Principle
+The main model selected in the IDE dropdown is the **hard ceiling**:
+- In Antigravity, subagents can only be `flash_lite` / `flash` / `pro` (Gemini) or `inherit`. **Claude/GPT cannot be spawned as subagents**.
+- Consequently, if Gemini Flash is selected in the UI, the agent can NEVER automatically delegate up to Claude/GPT.
+- To benefit from Claude/GPT for hard tasks (T3), Claude/GPT **must be selected as the main model** in the IDE selector; it will then automatically delegate downward (T1 -> Flash, T2 -> Pro/Flash).
+- Routing is always **downward**; never ask the user to switch models, except the single RED notice below.
 
 Each turn a `[router] main=<bucket>/<tier> | 5h x% . 7d y% | LEVEL | task~Tn [| AUTO-PRO|LIGHT]` line is
 injected. `task~Tn` is a zero-cost keyword heuristic; your own triage wins. If absent, assume `premium`/`GREEN`.
@@ -30,6 +32,12 @@ ONCE that the premium quota is nearly exhausted.
 `AUTO-PRO` = cheap main + hard task -> spawn `pro` now. `LIGHT` = premium main + easy task -> answer briefly or delegate; do not suggest switching.
 
 Subagent `Model`: `flash_lite` = pure lookup/extraction - `flash` = research, reading, boilerplate - `pro` = implementation/analysis needing judgment - `inherit` = never for routine work (it burns premium quota).
+
+### Critical Quota Protocol (< 15% 7d remaining or Generalized RED)
+When remaining 7d quota is < 15% (or 7d% >= 85% across active cloud models):
+- **Pure Cloud Orchestrator Mode**: The cloud model is strictly FORBIDDEN from generating code, algorithms, or test implementations directly in the chat or via cloud subagents.
+- **100% Local Worker Offloading**: All code generation, refactoring, bug fixes, and unit tests MUST be executed locally by LM Studio via `call_mcp_tool(ServerName="tiered-router", ToolName="execute_local_task", Arguments={"prompt": ...})` at 0 cloud tokens.
+- **Cloud Role Restricted to Orchestration**: The cloud model only analyzes requirements, formats prompts for `execute_local_task`, persists returned code to files (`write_file`/`edit_file`), runs verification commands (`cargo test`, `npm test`), and provides telegraphic summaries (< 100 words) to protect remaining tokens.
 
 ## 3. Delegation rules
 - **Local model offloading (0 tokens)**: When LM Studio is running, mechanical coding tasks (T0/T1, isolated functions, unit tests, docstrings, boilerplate, format conversions) can be delegated to the local model via the MCP tool `execute_local_task` on `tiered-router` to consume zero cloud quota.
