@@ -468,14 +468,20 @@ def level_for(u, bcfg, cfg):
 
 
 def _check_local_lm_status():
-    """Quick check if LM Studio is running and has a loaded model."""
+    """Quick check if LM Studio is running and has loaded models."""
     try:
         req = urllib.request.Request("http://127.0.0.1:1234/v1/models")
         with urllib.request.urlopen(req, timeout=0.15) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
                 models = [m.get("id", "") for m in data.get("data", []) if "embed" not in m.get("id", "").lower()]
-                if models:
+                if len(models) >= 2:
+                    has_splash = any("splash" in m.lower() for m in models)
+                    has_35b = any("35b" in m.lower() or "a3b" in m.lower() for m in models)
+                    if has_splash and has_35b:
+                        return " | local=dual(splash+35b)"
+                    return f" | local=dual({len(models)}m)"
+                elif models:
                     model_name = models[0].split("/")[-1]
                     return f" | local={model_name[:14]}"
                 return " | ⚠️ local=NO_MODEL"
