@@ -492,26 +492,66 @@ def level_for(u, bcfg, cfg):
     return lvl, p5, p7
 
 
-def _check_local_lm_status():
-    """Quick check if LM Studio is running and has loaded models."""
+def _check_local_lm_status(host: str = "http://127.0.0.1:1234") -> str:
+    """Quick check if LM Studio is running and has loaded LLM models."""
+    models: list[str] = []
     try:
-        req = urllib.request.Request("http://127.0.0.1:1234/v1/models")
+        req = urllib.request.Request(f"{host}/api/v0/models")
         with urllib.request.urlopen(req, timeout=0.15) as resp:
-            if resp.status == 200:
+            if resp.status != 200:
+                raise urllib.error.URLError(f"HTTP {resp.status}")
+            data = json.loads(resp.read().decode("utf-8"))
+        models = [
+            m.get("id", "")
+            for m in data.get("data", [])
+            if m.get("id")
+            and m.get("state") == "loaded"
+            and m.get("type") != "embeddings"
+            and "embed" not in m.get("id", "").lower()
+        ]
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError, TypeError):
+        try:
+            req = urllib.request.Request(f"{host}/v1/models")
+            with urllib.request.urlopen(req, timeout=0.15) as resp:
+                if resp.status != 200:
+                    return " | ⚠️ local=OFFLINE"
                 data = json.loads(resp.read().decode("utf-8"))
-                models = [m.get("id", "") for m in data.get("data", []) if "embed" not in m.get("id", "").lower()]
-                if len(models) >= 2:
-                    has_splash = any("splash" in m.lower() for m in models)
-                    has_35b = any("35b" in m.lower() or "a3b" in m.lower() for m in models)
-                    if has_splash and has_35b:
-                        return " | local=dual(splash+35b)"
-                    return f" | local=dual({len(models)}m)"
-                elif models:
-                    model_name = models[0].split("/")[-1]
-                    return f" | local={model_name[:14]}"
-                return " | ⚠️ local=NO_MODEL"
-    except Exception:
-        return " | ⚠️ local=OFFLINE"
+            models = [
+                m.get("id", "")
+                for m in data.get("data", [])
+                if m.get("id") and "embed" not in m.get("id", "").lower()
+            ]
+        except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError, TypeError):
+            return " | ⚠️ local=OFFLINE"
+
+    if len(models) >= 2:
+        has_splash = any("splash" in m.lower() for m in models)
+        has_35b = any("35b" in m.lower() or "a3b" in m.lower() for m in models)
+        if has_splash and has_35b:
+            return " | local=dual(splash+35b)"
+        return f" | local=dual({len(models)}m)"
+    if models:
+        model_name = models[0].split("/")[-1]
+        return f" | local={model_name[:14]}"
+    return " | ⚠️ local=NO_MODEL"
+
+
+def _build_local_directive(loc_str: str, lvl: str, hint: str) -> str:
+    """Return an active PreInvocation Maker directive when Splash is loaded."""
+    if "splash" not in (loc_str or "").lower():
+        return ""
+    if lvl == "RED":
+        return (
+            ' | [LOCAL-FIRST MAKER] Quota RED: MUST offload code/tests/commits (>20L) '
+            'to execute_local_task(role="maker") [Splash, 0 tok]; '
+            'Phase 3 audit -> role="inquisitor" [35B]'
+        )
+    if lvl == "YELLOW" or (hint or "").startswith(("T1", "T2")):
+        return (
+            ' | [LOCAL-FIRST MAKER] Offload code/tests/commits (>20L) '
+            'to execute_local_task(role="maker") [Splash, 0 tok]; '
+            'Phase 3 audit -> role="inquisitor" [35B]'
+        )
     return ""
 
 
@@ -621,9 +661,10 @@ def run_hook():
     p5_str = "{:.0%}".format(p5) if p5 is not None else "N/A"
     p7_str = "{:.0%}".format(p7) if p7 is not None else "N/A"
     loc_str = _check_local_lm_status()
+    local_dir = _build_local_directive(loc_str, lvl, hint)
     head_str = _check_headroom_status()
-    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}{head} | [PHASE TRANSITIONS] Output phase banner (### [PHASE X/5 : ...]) ONCE per phase transition (do not repeat on every tool call)!".format(
-        b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str, head=head_str
+    msg = "[router] main={b}/{t} | 5h {p5} . 7d {p7} ({src}) | {lvl} | task~{h}{d}{loc}{ldir}{head} | [PHASE TRANSITIONS] Output phase banner (### [PHASE X/5 : ...]) ONCE per phase transition (do not repeat on every tool call)!".format(
+        b=bucket, t=tier, p5=p5_str, p7=p7_str, lvl=lvl, h=hint, d=dispatch, src=real_source, loc=loc_str, ldir=local_dir, head=head_str
     )
 
     # Only inject visible system message on the initial invocation of a user turn (invocationNum <= 1)
