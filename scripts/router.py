@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "router_config.json")
@@ -109,9 +110,33 @@ def _fetch_antigravity_quotas(force=False):
     except Exception:
         return None
 
-    # Discover and pair (hub_port, csrf_token) directly from running agy instances
+    # Discover and pair (hub_port, csrf_token) directly from daemon discovery files or running agy instances
     candidates = []
     seen = set()
+
+    # 1. Modern Antigravity: read daemon discovery files
+    daemon_dirs = [
+        Path.home() / ".gemini" / "antigravity" / "daemon",
+        Path.home() / ".antigravity" / "daemon",
+    ]
+    for d in daemon_dirs:
+        if d.is_dir():
+            for hub_file in d.glob("hub_*.json"):
+                try:
+                    data = json.loads(hub_file.read_text())
+                    pid = data.get("pid")
+                    port = data.get("httpPort")
+                    tok = data.get("csrfToken")
+                    if pid and port and tok:
+                        os.kill(pid, 0)
+                        pair = (int(port), str(tok))
+                        if pair not in seen:
+                            seen.add(pair)
+                            candidates.append(pair)
+                except Exception:
+                    continue
+
+    # 2. Legacy fallback: parse CLI args from ps
     for line in result.stdout.strip().split("\n"):
         if "agy" not in line or "--csrf_token=" not in line or "--hub-port=" not in line:
             continue
