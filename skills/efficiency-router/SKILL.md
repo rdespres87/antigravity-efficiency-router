@@ -37,7 +37,7 @@ Find: <specific questions>.
 Return (<=250 words): bullets with file:line refs; "NOT FOUND" if absent. No code dumps beyond 10-line snippets.
 ```
 
-Implementation (`TypeName: self`, `Model: pro`, or `flash` for boilerplate):
+Implementation (default: local `execute_local_task(role="maker")`, <=150 LOC/call; cloud `TypeName: self`, `Model: pro` ONLY for T3 or explicit user-approved cloud fallback):
 ```
 Goal: <behavior to achieve>.
 Files: <exact paths>. Do not touch: <paths>.
@@ -54,9 +54,8 @@ Return: recommended option, top 3 risks, what to verify. <=200 words.
 ```
 
 ## Choosing the ceiling model (one-time, not per question)
-The agent cannot switch its own main model, and Claude cannot be a subagent. So the user picks the
-**ceiling** once and routing below it is automatic:
-- **Auto (best quality)**: main = Claude (or the newest top model). Claude does T3 itself; T0 brief; T1 -> Flash; T2 -> Pro/self.
-- **Economy**: main = Gemini Flash. Ceiling is Gemini Pro (T3 -> `pro` subagent). Claude is never used.
+The agent cannot switch its own main model, and Claude cannot be a subagent. Routing is governed by `tiered-router` (Permanent Local-First `maker`/`inquisitor` across `GREEN`/`YELLOW`/`RED` + Strict Fail-Closed):
+- **Auto (best quality)**: main = Claude / Gemini Pro. Main handles T3 & orchestration; code/tests/commits -> local `maker` (`<=150 LOC`/call); Phase 3 -> local `inquisitor`; read-only cloud research -> `flash`.
+- **Economy**: main = Gemini Flash. Ceiling is Gemini Pro (T3 -> `pro` subagent); code/tests/audits still go to local LM Studio first.
 Only mention model switching when the premium bucket hits RED (once per conversation).
 New top model released: add it as a `premium` bucket in `router_config.json` (or `alias`), then select it as main.
