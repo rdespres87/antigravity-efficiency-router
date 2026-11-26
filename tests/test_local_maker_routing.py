@@ -140,6 +140,31 @@ class TestBuildLocalDirective(unittest.TestCase):
             "",
         )
 
+    def test_busy_lock_reports_busy_instead_of_offline_and_keeps_directive(self) -> None:
+        import fcntl
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = os.path.join(tmp, "lmstudio_queue.lock")
+            with open(lock_path, "a+") as fd:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+                try:
+                    with patch("router.LMSTUDIO_LOCK_PATH", lock_path), \
+                         patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timed out")):
+                        status = router._check_local_lm_status()
+                finally:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+
+        self.assertIn("local=busy", status)
+        self.assertNotIn("OFFLINE", status)
+        directive = router._build_local_directive(status, "RED", "T1")
+        self.assertIn("[LOCAL-FIRST MAKER]", directive)
+        self.assertIn("NO silent cloud fallback", directive)
+
+    def test_classify_neon_maps_to_gemini_pro(self) -> None:
+        cfg = router.load_config()
+        self.assertEqual(router.classify("gemini-4-neon-medium", cfg), "gemini_pro")
+
 
 if __name__ == "__main__":
     unittest.main()

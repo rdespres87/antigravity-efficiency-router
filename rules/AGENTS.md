@@ -18,7 +18,7 @@ Each turn injects `[router] main=<bucket>/<tier> | 5h x% . 7d y% | LEVEL | task~
 | cheap (Flash) | self | self | self | `pro` subagent analyzes/implements; self integrates |
 
 - **YELLOW**: T2 -> `pro`; on T3 keep core reasoning, delegate reading/implementation.
-- **RED**: delegate all coding/tests/commits to local LM Studio (`tiered-router`) or `pro`/`flash`; self = orchestration/final check only; warn the user ONCE if premium quota is nearly exhausted.
+- **RED**: delegate all coding/tests/commits to local LM Studio (`tiered-router`); self = orchestration/final check only; NEVER fallback silently to cloud (`pro`/`flash`/primary) if LM Studio is busy or offline — wait in the local FIFO queue or ask explicit user consent via `ask_question`; warn the user ONCE if premium quota is nearly exhausted.
 - `AUTO-PRO` = cheap main + hard task -> spawn `pro`. `LIGHT` = premium main + easy task -> answer briefly or delegate; never ask the user to switch models.
 - Subagent `Model`: `flash_lite` (lookup/extraction), `flash` (research/reading/boilerplate), `pro` (judgment-heavy implementation). Never use `inherit` for routine work.
 

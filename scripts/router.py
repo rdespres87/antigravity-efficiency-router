@@ -492,12 +492,58 @@ def level_for(u, bcfg, cfg):
     return lvl, p5, p7
 
 
+LMSTUDIO_LOCK_PATH = os.environ.get(
+    "LMSTUDIO_LOCK_PATH",
+    os.path.expanduser("~/.gemini/tmp/lmstudio_queue.lock"),
+)
+_LOCAL_LM_HTTP_TIMEOUT_SEC = 1.0
+
+
+def _is_local_lm_busy(lock_path=None):
+    """Return True if another process currently holds the shared LM Studio queue lock."""
+    effective_path = lock_path or LMSTUDIO_LOCK_PATH
+    if not os.path.exists(effective_path):
+        return False
+    try:
+        f = open(effective_path, "a+")
+    except OSError:
+        return False
+    try:
+        try:
+            import msvcrt
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                return False
+            except OSError:
+                return True
+        except ImportError:
+            try:
+                import fcntl
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    return False
+                except (BlockingIOError, OSError):
+                    return True
+            except ImportError:
+                return False
+    finally:
+        try:
+            f.close()
+        except OSError:
+            pass
+
+
 def _check_local_lm_status(host: str = "http://127.0.0.1:1234") -> str:
     """Quick check if LM Studio is running and has loaded LLM models."""
-    models: list[str] = []
+    busy = _is_local_lm_busy()
+    models = []
     try:
         req = urllib.request.Request(f"{host}/api/v0/models")
-        with urllib.request.urlopen(req, timeout=0.15) as resp:
+        with urllib.request.urlopen(req, timeout=_LOCAL_LM_HTTP_TIMEOUT_SEC) as resp:
             if resp.status != 200:
                 raise urllib.error.URLError(f"HTTP {resp.status}")
             data = json.loads(resp.read().decode("utf-8"))
@@ -512,9 +558,9 @@ def _check_local_lm_status(host: str = "http://127.0.0.1:1234") -> str:
     except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError, TypeError):
         try:
             req = urllib.request.Request(f"{host}/v1/models")
-            with urllib.request.urlopen(req, timeout=0.15) as resp:
+            with urllib.request.urlopen(req, timeout=_LOCAL_LM_HTTP_TIMEOUT_SEC) as resp:
                 if resp.status != 200:
-                    return " | ⚠️ local=OFFLINE"
+                    return " | local=busy(queued)" if busy else " | ⚠️ local=OFFLINE"
                 data = json.loads(resp.read().decode("utf-8"))
             models = [
                 m.get("id", "")
@@ -522,35 +568,37 @@ def _check_local_lm_status(host: str = "http://127.0.0.1:1234") -> str:
                 if m.get("id") and "embed" not in m.get("id", "").lower()
             ]
         except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError, TypeError):
-            return " | ⚠️ local=OFFLINE"
+            return " | local=busy(queued)" if busy else " | ⚠️ local=OFFLINE"
 
+    busy_suffix = "[busy]" if busy else ""
     if len(models) >= 2:
         has_splash = any("splash" in m.lower() for m in models)
         has_35b = any("35b" in m.lower() or "a3b" in m.lower() for m in models)
         if has_splash and has_35b:
-            return " | local=dual(splash+35b)"
-        return f" | local=dual({len(models)}m)"
+            return f" | local=dual(splash+35b){busy_suffix}"
+        return f" | local=dual({len(models)}m){busy_suffix}"
     if models:
         model_name = models[0].split("/")[-1]
-        return f" | local={model_name[:14]}"
-    return " | ⚠️ local=NO_MODEL"
+        return f" | local={model_name[:14]}{busy_suffix}"
+    return " | local=busy(queued)" if busy else " | ⚠️ local=NO_MODEL"
 
 
 def _build_local_directive(loc_str: str, lvl: str, hint: str) -> str:
-    """Return an active PreInvocation Maker directive when Splash is loaded."""
-    if "splash" not in (loc_str or "").lower():
+    """Return an active PreInvocation Maker directive when Splash is loaded or queued."""
+    low_loc = (loc_str or "").lower()
+    if "splash" not in low_loc and "busy" not in low_loc:
         return ""
     if lvl == "RED":
         return (
             ' | [LOCAL-FIRST MAKER] Quota RED: MUST offload code/tests/commits (>20L) '
-            'to execute_local_task(role="maker") [Splash, 0 tok]; '
-            'Phase 3 audit -> role="inquisitor" [35B]'
+            'to execute_local_task(role="maker") [Splash, 0 tok, FIFO queue]; '
+            'Phase 3 audit -> role="inquisitor" [35B] | NO silent cloud fallback'
         )
     if lvl == "YELLOW" or (hint or "").startswith(("T1", "T2")):
         return (
             ' | [LOCAL-FIRST MAKER] Offload code/tests/commits (>20L) '
-            'to execute_local_task(role="maker") [Splash, 0 tok]; '
-            'Phase 3 audit -> role="inquisitor" [35B]'
+            'to execute_local_task(role="maker") [Splash, 0 tok, FIFO queue]; '
+            'Phase 3 audit -> role="inquisitor" [35B] | NO silent cloud fallback'
         )
     return ""
 

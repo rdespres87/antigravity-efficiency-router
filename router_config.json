@@ -32,7 +32,8 @@
       "patterns": [
         "gemini.*pro",
         "\\bpro\\b",
-        "argon"
+        "argon",
+        "neon"
       ],
       "budget_5h": 15000000,
       "budget_7d": 70000000
